@@ -6,6 +6,7 @@ import os
 import argparse
 import shutil
 import re
+import unicodedata
 
 ENV_TMDB = "TMDB_API_TOKEN"
 
@@ -26,7 +27,8 @@ MOVIE_EXTENSIONS = ["mkv", "mp4", "avi", "mov", "webm", "ts", "ogg"]
 
 def normalize(title, verbose=False):
     # Replace all non-word characters
-    norm = re.sub(r"\W+", " ", title.lower()).strip()
+    fixed_encoding = unicodedata.normalize('NFC', title)
+    norm = re.sub(r"\W+", " ", fixed_encoding.lower()).strip()
     if verbose: print(f"{title} -> {norm=}")
     return norm
 
@@ -144,7 +146,8 @@ def format_movie(args, folder_data, tmdb_data, verbose):
                 "label"] else f"{folder_name}.{file_data['extension']}"
 
         file_path = os.path.join(dir_path, file_name)
-        if file_data["path"] != file_path:
+        # Check if the new filename is different from the old one, encoding invariant
+        if unicodedata.normalize('NFC', file_data["path"]) != unicodedata.normalize('NFC', file_path):
             if os.path.exists(file_path):
                 raise Exception(f"File {file_path} already exists. Will not overwrite with {file_data['path']}")
             if args.move:
@@ -153,6 +156,10 @@ def format_movie(args, folder_data, tmdb_data, verbose):
             else:
                 shutil.copy2(file_data["path"], file_path)
                 if verbose: print(f"Copied {file_data['path']} to {file_path}")
+        # Check if the new filename is different from the old one in encoding alone
+        elif file_data["path"] != file_path:
+            if verbose: print(f"WARNING: File {file_path} is stored under a different encoding.")
+            # shutil.move(file_data["path"], file_path)
 
         if file_data["extension"] not in MOVIE_EXTENSIONS and args.delete_unrecognised:
             print(f"Deleting unrecognised file {file_path}")
@@ -161,9 +168,13 @@ def format_movie(args, folder_data, tmdb_data, verbose):
             else:
                 os.remove(file_path)
 
-    if args.move and dir_path != folder_data["path"]:
+
+    if args.move and unicodedata.normalize('NFC', folder_data["path"]) != unicodedata.normalize('NFC', dir_path):
         print(f"Deleting source folder {folder_data['path']}")
         shutil.rmtree(folder_data["path"])
+    elif folder_data["path"] != dir_path:
+        if verbose: print(f"WARNING: Dir {dir_path} is stored under a different encoding.")
+        # shutil.move(folder_data["path"], dir_path)
 
 
 if __name__ == "__main__":
