@@ -19,6 +19,7 @@ FILE_REGEX = rf"^.*{LABEL_REGEX_PART}\.(?P<extension>[\w]+)$"
 
 # primary_release_year specifies the primary release, while year would specify any release for that title (dvd, theatrical, etc.)
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie?query={query}&primary_release_year={year}&include_adult=true&language=en-US&page={page}"
+TMDB_SEARCH_URL_NO_YEAR = "https://api.themoviedb.org/3/search/movie?query={query}&include_adult=true&language=en-US&page={page}"
 TMDB_BY_ID_URL = "https://api.themoviedb.org/3/movie/{id}?language=en-US"
 
 # https://jellyfin.org/docs/general/clients/codec-support/
@@ -72,15 +73,25 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
         max_page = 1
         total_results = 0
         results = []
+
         while page <= max_page:
             url = TMDB_SEARCH_URL.format(query=title, page=page, year=year)
             response = requests.get(url, headers=headers).json()
             max_page = response["total_pages"]
             total_results = response["total_results"]
-
             results.extend(response["results"])
-
             page += 1
+
+        if len(results) == 0:
+            print(f"WARNING: No results found for {title} ({year}), searching any year.")
+            page = 1
+            while page <= max_page:
+                url = TMDB_SEARCH_URL_NO_YEAR.format(query=title, page=page, year=year)
+                response = requests.get(url, headers=headers).json()
+                max_page = response["total_pages"]
+                total_results = response["total_results"]
+                results.extend(response["results"])
+                page += 1
 
     if verbose:
         print(f"{total_results=} {len(results)=} for {title} ({year}) [{tmdbid=}]")
