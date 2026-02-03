@@ -18,6 +18,7 @@ FILE_REGEX = rf"^.*{LABEL_REGEX_PART}\.(?P<extension>[\w]+)$"
 
 # primary_release_year specifies the primary release, while year would specify any release for that title (dvd, theatrical, etc.)
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie?query={query}&primary_release_year={year}&include_adult=true&language=en-US&page={page}"
+TMDB_BY_ID_URL = "https://api.themoviedb.org/3/movie/{id}?language=en-US"
 
 # https://jellyfin.org/docs/general/clients/codec-support/
 MOVIE_EXTENSIONS = ["mkv", "mp4", "avi", "mov", "webm", "ts", "ogg"]
@@ -58,22 +59,29 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
         "Authorization": f"Bearer {api_token}"
     }
 
-    page = 1
-    max_page = 1
-    total_results = 0
-    results = []
-    while page <= max_page:
-        url = TMDB_SEARCH_URL.format(query=title, page=page, year=year)
+    if tmdbid is not None:
+        total_results = 1
+        url = TMDB_BY_ID_URL.format(id=tmdbid)
         response = requests.get(url, headers=headers).json()
-        max_page = response["total_pages"]
-        total_results = response["total_results"]
+        results = [response]
 
-        results.extend(response["results"])
+    else:
+        page = 1
+        max_page = 1
+        total_results = 0
+        results = []
+        while page <= max_page:
+            url = TMDB_SEARCH_URL.format(query=title, page=page, year=year)
+            response = requests.get(url, headers=headers).json()
+            max_page = response["total_pages"]
+            total_results = response["total_results"]
 
-        page += 1
+            results.extend(response["results"])
+
+            page += 1
 
     if verbose:
-        print(f"{total_results=} {len(results)=} for {title} ({year})")
+        print(f"{total_results=} {len(results)=} for {title} ({year}) [{tmdbid=}]")
         for result in results:
             print(f"{result['title']} / {result['original_title']} ({result['release_date']})")
 
@@ -130,7 +138,7 @@ def format_movie(args, folder_data, tmdb_data, verbose):
     if not os.path.exists(dir_path):
         os.mkdir(dir_path)
 
-    for file_name, file_data in folder_data["files"].items():
+    for file_name, file_data in folder_data.get("files", {}).items():
         if file_data["extension"] in MOVIE_EXTENSIONS:
             file_name = f"{folder_name} - {file_data['label']}.{file_data['extension']}" if file_data[
                 "label"] else f"{folder_name}.{file_data['extension']}"
@@ -152,6 +160,10 @@ def format_movie(args, folder_data, tmdb_data, verbose):
                 shutil.rmtree(file_path)
             else:
                 os.remove(file_path)
+
+    if args.move and dir_path != folder_data["path"]:
+        print(f"Deleting source folder {folder_data['path']}")
+        shutil.rmtree(folder_data["path"])
 
 
 if __name__ == "__main__":
