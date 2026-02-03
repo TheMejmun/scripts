@@ -105,7 +105,7 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
             page += 1
 
         if len(results) == 0:
-            print(f"WARNING: No results found for {title} ({year}), searching any year.")
+            if verbose: print(f"WARNING: No results found for {title} ({year}), searching any year.")
             page = 1
             while page <= max_page:
                 url = TMDB_SEARCH_URL_NO_YEAR.format(query=title, page=page, year=year)
@@ -115,7 +115,7 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
                 page += 1
 
         if len(results) == 0:
-            tmdbid_str = input(f"No results found for {title} ({year}). Enter TMDB ID: ")
+            tmdbid_str = input(f"\nNo results found for {title} ({year}). Enter TMDB ID: ")
             if tmdbid_str.strip() != "":
                 tmdbid = int(tmdbid_str.strip())
                 results = get_tmdb_by_id(api_token, tmdbid)
