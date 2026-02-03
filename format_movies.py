@@ -44,26 +44,40 @@ def parse_folder(path, verbose):
         print(f"ERROR: Could not parse {path}. Skipping.")
         return None
 
+    data["files"] = {}
     for dir_content in os.scandir(path):
         file_name = dir_content.name
-        data.setdefault("files", {})[file_name] = {"path": dir_content.path}
+        data["files"][file_name] = {"path": dir_content.path}
         if match := re.match(FILE_REGEX, file_name):
             data["files"][file_name].update(match.groupdict())
         else:
             data["files"][file_name].update({"label": None, "extension": None})
 
+    if len(data["files"]) == 0: print(f"WARNING: {path} is empty.")
     if verbose: print(f"{data=}")
     return data
 
+
 def get(url, headers):
     response = requests.get(url, headers=headers)
-    if response.status_code != 429:
+    if response.status_code == 429:
         print(f"WARNING: Rate limit exceeded, sleeping for 10 seconds.")
         time.sleep(10)
         return get(url, headers)
     elif response.status_code != 200:
         raise Exception(f"Error {response.status_code} while getting {url}")
     return response
+
+
+def get_tmdb_by_id(api_token, tmdbid):
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_token}"
+    }
+    url = TMDB_BY_ID_URL.format(id=tmdbid)
+    response = get(url, headers).json()
+    return [response]
+
 
 # TODO for existing tmdbid
 def get_tmdb(api_token, tmdbid, title, year, verbose):
@@ -76,22 +90,17 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
     }
 
     if tmdbid is not None:
-        total_results = 1
-        url = TMDB_BY_ID_URL.format(id=tmdbid)
-        response = get(url, headers).json()
-        results = [response]
+        results = get_tmdb_by_id(api_token, tmdbid)
 
     else:
         page = 1
         max_page = 1
-        total_results = 0
         results = []
 
         while page <= max_page:
             url = TMDB_SEARCH_URL.format(query=title, page=page, year=year)
             response = get(url, headers).json()
             max_page = response["total_pages"]
-            total_results = response["total_results"]
             results.extend(response["results"])
             page += 1
 
@@ -102,12 +111,17 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
                 url = TMDB_SEARCH_URL_NO_YEAR.format(query=title, page=page, year=year)
                 response = get(url, headers).json()
                 max_page = response["total_pages"]
-                total_results = response["total_results"]
                 results.extend(response["results"])
                 page += 1
 
+        if len(results) == 0:
+            tmdbid_str = input(f"No results found for {title} ({year}). Enter TMDB ID: ")
+            if tmdbid_str.strip() != "":
+                tmdbid = int(tmdbid_str.strip())
+                results = get_tmdb_by_id(api_token, tmdbid)
+
     if verbose:
-        print(f"{total_results=} {len(results)=} for {title} ({year}) [{tmdbid=}]")
+        print(f"{len(results)=} for {title} ({year}) [{tmdbid=}]")
         for result in results:
             print(f"{result['title']} / {result['original_title']} ({result['release_date']})")
 
@@ -191,7 +205,6 @@ def format_movie(args, folder_data, tmdb_data, verbose):
                 shutil.rmtree(file_path)
             else:
                 os.remove(file_path)
-
 
     if args.move and unicodedata.normalize('NFC', folder_data["path"]) != unicodedata.normalize('NFC', dir_path):
         print(f"Deleting source folder {folder_data['path']}")
