@@ -57,6 +57,9 @@ def parse_folder(path, verbose):
 
 # TODO for existing tmdbid
 def get_tmdb(api_token, tmdbid, title, year, verbose):
+    # Fixes Korean titles
+    title = unicodedata.normalize('NFC', title)
+
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {api_token}"
