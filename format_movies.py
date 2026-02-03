@@ -7,6 +7,7 @@ import argparse
 import shutil
 import re
 import unicodedata
+import time
 
 ENV_TMDB = "TMDB_API_TOKEN"
 
@@ -54,6 +55,15 @@ def parse_folder(path, verbose):
     if verbose: print(f"{data=}")
     return data
 
+def get(url, headers):
+    response = requests.get(url, headers=headers)
+    if response.status_code != 429:
+        print(f"WARNING: Rate limit exceeded, sleeping for 10 seconds.")
+        time.sleep(10)
+        return get(url, headers)
+    elif response.status_code != 200:
+        raise Exception(f"Error {response.status_code} while getting {url}")
+    return response
 
 # TODO for existing tmdbid
 def get_tmdb(api_token, tmdbid, title, year, verbose):
@@ -68,7 +78,7 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
     if tmdbid is not None:
         total_results = 1
         url = TMDB_BY_ID_URL.format(id=tmdbid)
-        response = requests.get(url, headers=headers).json()
+        response = get(url, headers).json()
         results = [response]
 
     else:
@@ -79,7 +89,7 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
 
         while page <= max_page:
             url = TMDB_SEARCH_URL.format(query=title, page=page, year=year)
-            response = requests.get(url, headers=headers).json()
+            response = get(url, headers).json()
             max_page = response["total_pages"]
             total_results = response["total_results"]
             results.extend(response["results"])
@@ -90,7 +100,7 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
             page = 1
             while page <= max_page:
                 url = TMDB_SEARCH_URL_NO_YEAR.format(query=title, page=page, year=year)
-                response = requests.get(url, headers=headers).json()
+                response = get(url, headers).json()
                 max_page = response["total_pages"]
                 total_results = response["total_results"]
                 results.extend(response["results"])
