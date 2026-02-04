@@ -13,10 +13,11 @@ ENV_TMDB = "TMDB_API_TOKEN"
 
 TITLE_REGEX_PART = r"(?P<title>.+)"
 YEAR_REGEX_PART = r"\((?P<year>[0-9][0-9][0-9][0-9])\)"
-PROVIDER_REGEX_PART = r"(\s\[tmdbid-(?P<tmdbid>[0-9]+)\])?"  # Could have multiple
-LABEL_REGEX_PART = r"(\s-\s\[?(?P<label>[\w\s]+)\]?)?"
-DIR_REGEX = rf"^{TITLE_REGEX_PART}\s{YEAR_REGEX_PART}{PROVIDER_REGEX_PART}.*$"
-FILE_REGEX = rf"^.*{LABEL_REGEX_PART}\.(?P<extension>[\w]+)$"
+PROVIDER_REGEX_PART = r"(\s\[tmdbid-(?P<tmdbid>[0-9]+)\])"  # Could have multiple
+LABEL_REGEX_PART = r"(\s-\s\[?(?P<label>[\w\s]+)\]?)"
+DIR_REGEX = rf"^{TITLE_REGEX_PART}\s{YEAR_REGEX_PART}{PROVIDER_REGEX_PART}?.*$"
+# FILE_REGEX = rf"^.*{LABEL_REGEX_PART}?\.(?P<extension>[\w]+)$"
+FILE_REGEX = rf"^(((?!\s-\s).)+{LABEL_REGEX_PART}|.*)\.(?P<extension>[\w]+)$"
 
 # primary_release_year specifies the primary release, while year would specify any release for that title (dvd, theatrical, etc.)
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie?query={query}&primary_release_year={year}&include_adult=true&language=en-US&page={page}"
@@ -180,8 +181,8 @@ def format_movie(args, folder_data, tmdb_data, verbose):
 
     for file_name, file_data in folder_data.get("files", {}).items():
         if file_data["extension"] in MOVIE_EXTENSIONS:
-            file_name = f"{folder_name} - {file_data['label']}.{file_data['extension']}" if file_data[
-                "label"] else f"{folder_name}.{file_data['extension']}"
+            label = format_title(file_data["label"], not args.dont_capitalize) if file_data["label"] else ""
+            file_name = f"{folder_name} - {label}.{file_data['extension']}" if label else f"{folder_name}.{file_data['extension']}"
 
         file_path = os.path.join(dir_path, file_name)
         # Check if the new filename is different from the old one, encoding invariant
