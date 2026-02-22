@@ -7,6 +7,7 @@ import re
 import unicodedata
 import time
 import logging
+import subprocess
 
 
 # https://stackoverflow.com/a/56944256/1951476
@@ -51,6 +52,8 @@ TMDB_BY_ID_URL = "https://api.themoviedb.org/3/movie/{id}?language=en-US"
 # https://jellyfin.org/docs/general/clients/codec-support/
 MOVIE_EXTENSIONS = ["mkv", "mp4", "avi", "mov", "webm", "ts", "ogg"]
 
+# https://jellyfin.org/docs/general/server/media/movies/#extras-folders
+EXTRAS_FOLDER = ["extras", "featurettes"]
 
 
 def unicde_eq(a, b):
@@ -83,6 +86,8 @@ def parse_folder(path):
             data["files"][file_name]["extension"] = data["files"][file_name]["extension"].lower()
         else:
             data["files"][file_name].update({"label": None, "extension": None})
+
+        data["files"][file_name]["is_extras_dir"] = file_name.lower() in EXTRAS_FOLDER
 
     if len(data["files"]) == 0: log.warning(f"{path} is empty.")
     log.debug(f"{data=}")
@@ -213,6 +218,26 @@ def format_movie(args, folder_data, tmdb_data):
             file_name = f"{folder_name} - {label}.{file_data['extension']}" if label else f"{folder_name}.{file_data['extension']}"
 
         file_path = os.path.join(dir_path, file_name)
+
+        if file_data["is_extras_dir"]:
+            if unicde_eq(file_data["path"], file_path): continue
+            if not os.path.exists(file_path): os.mkdir(file_path)
+            for dir_content in os.scandir(file_data["path"]):
+                if match := re.match(FILE_REGEX, dir_content.name):
+                    if match.group("extension") in MOVIE_EXTENSIONS:
+                        log.debug(f"{dir_content.name} is a video")
+                        continue
+                log.debug(f"Deleting {dir_content.path}")
+                if os.path.isdir(dir_content.path):
+                    shutil.rmtree(dir_content.path)
+                else:
+                    os.remove(dir_content.path)
+            rs_from = file_data["path"] + "/"
+            rs_to = file_path + "/"
+            subprocess.run(["rsync", "-avh", rs_from, rs_to])
+            if args.move: shutil.rmtree(file_data["path"])
+            continue
+
         # Check if the new filename is different from the old one, encoding invariant
         if not unicde_eq(file_data["path"], file_path):
             if os.path.exists(file_path):
@@ -283,5 +308,7 @@ if __name__ == "__main__":
         tmdb_data = get_tmdb(args.api_token, folder_data["tmdbid"], folder_data["title"], folder_data["year"])
 
         match = find_match(folder_data, tmdb_data)
+
+        log.info(f"files: {folder_data['files']}")
 
         format_movie(args, folder_data, match)
