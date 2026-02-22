@@ -52,6 +52,11 @@ TMDB_BY_ID_URL = "https://api.themoviedb.org/3/movie/{id}?language=en-US"
 MOVIE_EXTENSIONS = ["mkv", "mp4", "avi", "mov", "webm", "ts", "ogg"]
 
 
+
+def unicde_eq(a, b):
+    return unicodedata.normalize('NFC', a) == unicodedata.normalize('NFC', b)
+
+
 def normalize(title):
     # Replace all non-word characters
     fixed_encoding = unicodedata.normalize('NFC', title)
@@ -75,6 +80,7 @@ def parse_folder(path):
         data["files"][file_name] = {"path": dir_content.path}
         if match := re.match(FILE_REGEX, file_name):
             data["files"][file_name].update(match.groupdict())
+            data["files"][file_name]["extension"] = data["files"][file_name]["extension"].lower()
         else:
             data["files"][file_name].update({"label": None, "extension": None})
 
@@ -208,7 +214,7 @@ def format_movie(args, folder_data, tmdb_data):
 
         file_path = os.path.join(dir_path, file_name)
         # Check if the new filename is different from the old one, encoding invariant
-        if unicodedata.normalize('NFC', file_data["path"]) != unicodedata.normalize('NFC', file_path):
+        if not unicde_eq(file_data["path"], file_path):
             if os.path.exists(file_path):
                 raise Exception(f"File {file_path} already exists. Will not overwrite with {file_data['path']}")
             if args.move:
@@ -229,7 +235,7 @@ def format_movie(args, folder_data, tmdb_data):
             else:
                 os.remove(file_path)
 
-    if args.move and unicodedata.normalize('NFC', folder_data["path"]) != unicodedata.normalize('NFC', dir_path):
+    if args.move and not unicde_eq(folder_data["path"], dir_path):
         log.info(f"Deleting source folder {folder_data['path']}")
         shutil.rmtree(folder_data["path"])
     elif folder_data["path"] != dir_path:
