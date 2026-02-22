@@ -309,6 +309,4 @@ if __name__ == "__main__":
 
         match = find_match(folder_data, tmdb_data)
 
-        log.info(f"files: {folder_data['files']}")
-
         format_movie(args, folder_data, match)
