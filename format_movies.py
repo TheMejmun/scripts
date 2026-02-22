@@ -1,6 +1,4 @@
 #!/usr/bin/env -S PYENV_VERSION=scriptenv python
-from tabnanny import verbose
-
 import requests
 import os
 import argparse
@@ -8,6 +6,9 @@ import shutil
 import re
 import unicodedata
 import time
+import logging
+
+log = logging.getLogger(__name__)
 
 ENV_TMDB = "TMDB_API_TOKEN"
 
@@ -28,21 +29,21 @@ TMDB_BY_ID_URL = "https://api.themoviedb.org/3/movie/{id}?language=en-US"
 MOVIE_EXTENSIONS = ["mkv", "mp4", "avi", "mov", "webm", "ts", "ogg"]
 
 
-def normalize(title, verbose=False):
+def normalize(title):
     # Replace all non-word characters
     fixed_encoding = unicodedata.normalize('NFC', title)
     norm = re.sub(r"\W+", " ", fixed_encoding.lower()).strip()
-    if verbose: print(f"{title} -> {norm=}")
+    log.debug(f"{title} -> {norm=}")
     return norm
 
 
-def parse_folder(path, verbose):
+def parse_folder(path):
     data = {"path": path}
 
     if match := re.match(DIR_REGEX, os.path.basename(path)):
         data.update(match.groupdict())
     else:
-        print(f"ERROR: Could not parse {path}. Skipping.")
+        log.error(f"Could not parse {path}. Skipping.")
         return None
 
     data["files"] = {}
@@ -54,15 +55,15 @@ def parse_folder(path, verbose):
         else:
             data["files"][file_name].update({"label": None, "extension": None})
 
-    if len(data["files"]) == 0: print(f"WARNING: {path} is empty.")
-    if verbose: print(f"{data=}")
+    if len(data["files"]) == 0: log.warning(f"{path} is empty.")
+    log.debug(f"{data=}")
     return data
 
 
 def get(url, headers):
     response = requests.get(url, headers=headers)
     if response.status_code == 429:
-        print(f"WARNING: Rate limit exceeded, sleeping for 10 seconds.")
+        log.warning(f"Rate limit exceeded, sleeping for 10 seconds.")
         time.sleep(10)
         return get(url, headers)
     elif response.status_code != 200:
@@ -81,7 +82,7 @@ def get_tmdb_by_id(api_token, tmdbid):
 
 
 # TODO for existing tmdbid
-def get_tmdb(api_token, tmdbid, title, year, verbose):
+def get_tmdb(api_token, tmdbid, title, year):
     # Fixes Korean titles
     title = unicodedata.normalize('NFC', title)
 
@@ -106,7 +107,7 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
             page += 1
 
         if len(results) == 0:
-            if verbose: print(f"WARNING: No results found for {title} ({year}), searching any year.")
+            log.debug(f"No results found for {title} ({year}), searching any year.")
             page = 1
             while page <= max_page:
                 url = TMDB_SEARCH_URL_NO_YEAR.format(query=title, page=page, year=year)
@@ -121,34 +122,33 @@ def get_tmdb(api_token, tmdbid, title, year, verbose):
                 tmdbid = int(tmdbid_str.strip())
                 results = get_tmdb_by_id(api_token, tmdbid)
 
-    if verbose:
-        print(f"{len(results)=} for {title} ({year}) [{tmdbid=}]")
-        for result in results:
-            print(f"{result['title']} / {result['original_title']} ({result['release_date']})")
+    log.debug(f"{len(results)=} for {title} ({year}) [{tmdbid=}]")
+    for result in results:
+        log.debug(f"{result['title']} / {result['original_title']} ({result['release_date']})")
 
     return results
 
 
-def find_match(folder_data, tmdb_data, verbose):
+def find_match(folder_data, tmdb_data):
     if len(tmdb_data) == 0: return None
 
-    title_norm = normalize(folder_data["title"], verbose)
+    title_norm = normalize(folder_data["title"])
     tmdb_data_filtered = [
         entry
         for entry in tmdb_data
-        if normalize(entry["original_title"], verbose) == title_norm or
-           normalize(entry["title"], verbose) == title_norm
+        if normalize(entry["original_title"]) == title_norm or
+           normalize(entry["title"]) == title_norm
     ]
 
     if len(tmdb_data_filtered) == 1:
         return tmdb_data_filtered[0]
 
     else:
-        print("\nPossible matches:")
+        log.info("\nPossible matches:")
         for i, entry in enumerate(tmdb_data):
-            print(f"\t{i}: {entry['title']} / {entry['original_title']} ({entry['release_date']}) [{entry['id']}]")
-        print(f"\t{len(tmdb_data)}: None of the above")
-        print(f"For path {folder_data['path']}")
+            log.info(f"\t{i}: {entry['title']} / {entry['original_title']} ({entry['release_date']}) [{entry['id']}]")
+        log.info(f"\t{len(tmdb_data)}: None of the above")
+        log.info(f"For path {folder_data['path']}")
         selection = int(input(f"Select match for {folder_data['title']} ({folder_data['year']}): "))
         return None if selection == len(tmdb_data) else tmdb_data[selection]
 
@@ -161,7 +161,7 @@ def format_title(title, capitalize):
     return title
 
 
-def format_movie(args, folder_data, tmdb_data, verbose):
+def format_movie(args, folder_data, tmdb_data):
     if tmdb_data is None:
         title = format_title(folder_data["title"], not args.dont_capitalize)
         year = folder_data["year"]
@@ -171,7 +171,7 @@ def format_movie(args, folder_data, tmdb_data, verbose):
         year = tmdb_data["release_date"].split("-")[0]
         tmdbid = tmdb_data["id"]
 
-    if verbose: print(f"Formatting {folder_data['path']} as {title} ({year}) [{tmdbid=}]")
+    log.debug(f"Formatting {folder_data['path']} as {title} ({year}) [{tmdbid=}]")
 
     out_dir = args.out_dir if args.out_dir is not None else os.path.dirname(folder_data["path"])
     folder_name = f"{title} ({year})" if tmdbid is None else f"{title} ({year}) [tmdbid-{tmdbid}]"
@@ -191,27 +191,27 @@ def format_movie(args, folder_data, tmdb_data, verbose):
                 raise Exception(f"File {file_path} already exists. Will not overwrite with {file_data['path']}")
             if args.move:
                 shutil.move(file_data["path"], file_path)
-                if verbose: print(f"Moved {file_data['path']} to {file_path}")
+                log.debug(f"Moved {file_data['path']} to {file_path}")
             else:
                 shutil.copy2(file_data["path"], file_path)
-                if verbose: print(f"Copied {file_data['path']} to {file_path}")
+                log.debug(f"Copied {file_data['path']} to {file_path}")
         # Check if the new filename is different from the old one in encoding alone
         elif file_data["path"] != file_path:
-            if verbose: print(f"WARNING: File {file_path} is stored under a different encoding.")
+            log.warning(f"File {file_path} is stored under a different encoding.")
             # shutil.move(file_data["path"], file_path)
 
         if file_data["extension"] not in MOVIE_EXTENSIONS and args.delete_unrecognised:
-            print(f"Deleting unrecognised file {file_path}")
+            log.info(f"Deleting unrecognised file {file_path}")
             if os.path.isdir(file_path):
                 shutil.rmtree(file_path)
             else:
                 os.remove(file_path)
 
     if args.move and unicodedata.normalize('NFC', folder_data["path"]) != unicodedata.normalize('NFC', dir_path):
-        print(f"Deleting source folder {folder_data['path']}")
+        log.info(f"Deleting source folder {folder_data['path']}")
         shutil.rmtree(folder_data["path"])
     elif folder_data["path"] != dir_path:
-        if verbose: print(f"WARNING: Dir {dir_path} is stored under a different encoding.")
+        log.warning(f"Dir {dir_path} is stored under a different encoding.")
         # shutil.move(folder_data["path"], dir_path)
 
 
@@ -230,29 +230,32 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
-    if args.verbose: print(f"args: {vars(args)}")
+    if args.verbose:
+        log.setLevel(logging.DEBUG)
+    else:
+        log.setLevel(logging.INFO)
+
+    log.debug(f"args: {vars(args)}")
 
     api_token = args.api_token
     if api_token is None:
         if not os.environ.get(ENV_TMDB):
-            print(f"ERROR: No environment variable {ENV_TMDB} found, and no --api-token argument provided.")
-            # parser.print_help()
+            log.error(f"No environment variable {ENV_TMDB} found, and no --api-token argument provided.")
             exit(1)
         api_token = os.environ[ENV_TMDB]
 
     if not os.path.isdir(args.dir):
-        print(f"{args.dir} is not a directory.")
+        log.error(f"{args.dir} is not a directory.")
         exit(1)
 
     for movie_dir in os.scandir(args.dir):
         if not movie_dir.is_dir():
             continue
 
-        folder_data = parse_folder(movie_dir.path, args.verbose)
+        folder_data = parse_folder(movie_dir.path)
         if folder_data is None: continue
-        tmdb_data = get_tmdb(args.api_token, folder_data["tmdbid"], folder_data["title"], folder_data["year"],
-                             args.verbose)
+        tmdb_data = get_tmdb(args.api_token, folder_data["tmdbid"], folder_data["title"], folder_data["year"])
 
-        match = find_match(folder_data, tmdb_data, args.verbose)
+        match = find_match(folder_data, tmdb_data)
 
-        format_movie(args, folder_data, match, args.verbose)
+        format_movie(args, folder_data, match)
