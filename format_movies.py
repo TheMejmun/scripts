@@ -8,6 +8,29 @@ import unicodedata
 import time
 import logging
 
+
+# https://stackoverflow.com/a/56944256/1951476
+class CustomFormatter(logging.Formatter):
+    grey = "\x1b[38;20m"
+    yellow = "\x1b[33;20m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    reset = "\x1b[0m"
+    format = "%(message)s"
+    FORMATS = {
+        logging.DEBUG: grey + format + reset,
+        logging.INFO: grey + format + reset,
+        logging.WARNING: yellow + format + reset,
+        logging.ERROR: red + format + reset,
+        logging.CRITICAL: bold_red + format + reset
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+
+
 log = logging.getLogger(__name__)
 
 ENV_TMDB = "TMDB_API_TOKEN"
@@ -81,7 +104,6 @@ def get_tmdb_by_id(api_token, tmdbid):
     return [response]
 
 
-# TODO for existing tmdbid
 def get_tmdb(api_token, tmdbid, title, year):
     # Fixes Korean titles
     title = unicodedata.normalize('NFC', title)
@@ -230,10 +252,8 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
-    if args.verbose:
-        log.setLevel(logging.DEBUG)
-    else:
-        log.setLevel(logging.INFO)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+    logging.getLogger().handlers[0].setFormatter(CustomFormatter())
 
     log.debug(f"args: {vars(args)}")
 
