@@ -1,0 +1,228 @@
+import requests
+import os
+import argparse
+import shutil
+import re
+import unicodedata
+import time
+import logging
+import subprocess
+from encoding import *
+from tmdb import *
+
+
+# https://stackoverflow.com/a/56944256/1951476
+class CustomFormatter(logging.Formatter):
+    grey = "\x1b[38;20m"
+    yellow = "\x1b[33;20m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    reset = "\x1b[0m"
+    format = "%(message)s"
+    FORMATS = {
+        logging.DEBUG: grey + format + reset,
+        logging.INFO: grey + format + reset,
+        logging.WARNING: yellow + format + reset,
+        logging.ERROR: red + format + reset,
+        logging.CRITICAL: bold_red + format + reset
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+
+
+log = logging.getLogger(__name__)
+
+ENV_TMDB = "TMDB_API_TOKEN"
+
+TITLE_REGEX_PART = r"(?P<title>.+)"
+YEAR_REGEX_PART = r"\((?P<year>[0-9][0-9][0-9][0-9])\)"
+PROVIDER_REGEX_PART = r"(\s\[tmdbid-(?P<tmdbid>[0-9]+)\])"  # Could have multiple
+LABEL_REGEX_PART = r"(\s-\s\[?(?P<label>[\w\s]+)\]?)"
+DIR_REGEX = rf"^{TITLE_REGEX_PART}\s{YEAR_REGEX_PART}{PROVIDER_REGEX_PART}?.*$"
+# FILE_REGEX = rf"^.*{LABEL_REGEX_PART}?\.(?P<extension>[\w]+)$"
+FILE_REGEX = rf"^(((?!\s-\s).)+{LABEL_REGEX_PART}|.*)\.(?P<extension>[\w]+)$"
+
+# https://jellyfin.org/docs/general/clients/codec-support/
+MOVIE_EXTENSIONS = ["mkv", "mp4", "avi", "mov", "webm", "ts", "ogg"]
+
+# https://jellyfin.org/docs/general/server/media/movies/#extras-folders
+EXTRAS_FOLDER = ["extras", "featurettes"]
+
+
+def parse_folder(path):
+    data = {"path": path}
+
+    if match := re.match(DIR_REGEX, os.path.basename(path)):
+        data.update(match.groupdict())
+    else:
+        log.error(f"Could not parse {path}. Skipping.")
+        return None
+
+    data["files"] = {}
+    for dir_content in os.scandir(path):
+        file_name = dir_content.name
+        data["files"][file_name] = {"path": dir_content.path}
+        if match := re.match(FILE_REGEX, file_name):
+            data["files"][file_name].update(match.groupdict())
+            data["files"][file_name]["extension"] = data["files"][file_name]["extension"].lower()
+        else:
+            data["files"][file_name].update({"label": None, "extension": None})
+
+        data["files"][file_name]["is_extras_dir"] = file_name.lower() in EXTRAS_FOLDER
+
+    if len(data["files"]) == 0: log.warning(f"{path} is empty.")
+    log.debug(f"{data=}")
+    return data
+
+
+def find_match(folder_data, tmdb_data):
+    if len(tmdb_data) == 0: return None
+
+    title_norm = normalize(folder_data["title"])
+    tmdb_data_filtered = [
+        entry
+        for entry in tmdb_data
+        if normalize(entry["original_title"]) == title_norm or
+           normalize(entry["title"]) == title_norm
+    ]
+
+    if len(tmdb_data_filtered) == 1:
+        return tmdb_data_filtered[0]
+
+    else:
+        log.info("\nPossible matches:")
+        for i, entry in enumerate(tmdb_data):
+            log.info(f"\t{i}: {entry['title']} / {entry['original_title']} ({entry['release_date']}) [{entry['id']}]")
+        log.info(f"\t{len(tmdb_data)}: None of the above")
+        log.info(f"For path {folder_data['path']}")
+        selection = int(input(f"Select match for {folder_data['title']} ({folder_data['year']}): "))
+        return None if selection == len(tmdb_data) else tmdb_data[selection]
+
+
+def format_title(title, capitalize):
+    elements = re.sub(r"\W+", " ", title).strip().split(" ")
+    if capitalize:
+        elements = [e.capitalize() for e in elements]
+    title = " ".join(elements)
+    return title
+
+
+def format_movie(args, folder_data, tmdb_data):
+    if tmdb_data is None:
+        title = format_title(folder_data["title"], not args.dont_capitalize)
+        year = folder_data["year"]
+        tmdbid = None
+    else:
+        title = format_title(tmdb_data["original_title"], not args.dont_capitalize)
+        year = tmdb_data["release_date"].split("-")[0]
+        tmdbid = tmdb_data["id"]
+
+    log.debug(f"Formatting {folder_data['path']} as {title} ({year}) [{tmdbid=}]")
+
+    out_dir = args.out_dir if args.out_dir is not None else os.path.dirname(folder_data["path"])
+    folder_name = f"{title} ({year})" if tmdbid is None else f"{title} ({year}) [tmdbid-{tmdbid}]"
+    dir_path = os.path.join(out_dir, folder_name)
+    if not os.path.exists(dir_path):
+        os.mkdir(dir_path)
+
+    for file_name, file_data in folder_data.get("files", {}).items():
+        if file_data["extension"] in MOVIE_EXTENSIONS:
+            label = format_title(file_data["label"], not args.dont_capitalize) if file_data["label"] else ""
+            file_name = f"{folder_name} - {label}.{file_data['extension']}" if label else f"{folder_name}.{file_data['extension']}"
+
+        file_path = os.path.join(dir_path, file_name)
+
+        if file_data["is_extras_dir"]:
+            if unicde_eq(file_data["path"], file_path): continue
+            if not os.path.exists(file_path): os.mkdir(file_path)
+            for dir_content in os.scandir(file_data["path"]):
+                if match := re.match(FILE_REGEX, dir_content.name):
+                    if match.group("extension") in MOVIE_EXTENSIONS:
+                        log.debug(f"{dir_content.name} is a video")
+                        continue
+                log.debug(f"Deleting {dir_content.path}")
+                if os.path.isdir(dir_content.path):
+                    shutil.rmtree(dir_content.path)
+                else:
+                    os.remove(dir_content.path)
+            rs_from = file_data["path"] + "/"
+            rs_to = file_path + "/"
+            subprocess.run(["rsync", "-avh", rs_from, rs_to])
+            if args.move: shutil.rmtree(file_data["path"])
+            continue
+
+        # Check if the new filename is different from the old one, encoding invariant
+        if not unicde_eq(file_data["path"], file_path):
+            if os.path.exists(file_path):
+                raise Exception(f"File {file_path} already exists. Will not overwrite with {file_data['path']}")
+            if args.move:
+                shutil.move(file_data["path"], file_path)
+                log.debug(f"Moved {file_data['path']} to {file_path}")
+            else:
+                shutil.copy2(file_data["path"], file_path)
+                log.debug(f"Copied {file_data['path']} to {file_path}")
+        # Check if the new filename is different from the old one in encoding alone
+        elif file_data["path"] != file_path:
+            log.warning(f"File {file_path} is stored under a different encoding.")
+            # shutil.move(file_data["path"], file_path)
+
+        if file_data["extension"] not in MOVIE_EXTENSIONS and args.delete_unrecognised:
+            log.info(f"Deleting unrecognised file {file_path}")
+            if os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+            else:
+                os.remove(file_path)
+
+    if args.move and not unicde_eq(folder_data["path"], dir_path):
+        log.info(f"Deleting source folder {folder_data['path']}")
+        shutil.rmtree(folder_data["path"])
+    elif folder_data["path"] != dir_path:
+        log.warning(f"Dir {dir_path} is stored under a different encoding.")
+        # shutil.move(folder_data["path"], dir_path)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog='Movie Formatter',
+        description='Renames movies and folders',
+    )
+    parser.add_argument('dir', help="The input directory")
+    parser.add_argument('-o', '--out-dir', help="The output directoy")
+    parser.add_argument('-t', '--api-token', help="The TMDB API token")
+    parser.add_argument('-d', '--dont-capitalize', action='store_true',
+                        help="Don't force capitalization on movie titles")
+    parser.add_argument('-u', '--delete-unrecognised', action='store_true', help="Delete unrecognised files")
+    parser.add_argument('-m', '--move', action='store_true', help="Move files instead of copying")
+    parser.add_argument('-v', '--verbose', action='store_true')
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+    logging.getLogger().handlers[0].setFormatter(CustomFormatter())
+
+    log.debug(f"args: {vars(args)}")
+
+    api_token = args.api_token
+    if api_token is None:
+        if not os.environ.get(ENV_TMDB):
+            log.error(f"No environment variable {ENV_TMDB} found, and no --api-token argument provided.")
+            exit(1)
+        api_token = os.environ[ENV_TMDB]
+
+    if not os.path.isdir(args.dir):
+        log.error(f"{args.dir} is not a directory.")
+        exit(1)
+
+    for movie_dir in os.scandir(args.dir):
+        if not movie_dir.is_dir():
+            continue
+
+        folder_data = parse_folder(movie_dir.path)
+        if folder_data is None: continue
+        tmdb_data = get_tmdb(args.api_token, folder_data["tmdbid"], folder_data["title"], folder_data["year"])
+
+        match = find_match(folder_data, tmdb_data)
+
+        format_movie(args, folder_data, match)
